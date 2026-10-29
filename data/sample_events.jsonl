@@ -1,0 +1,16 @@
+{"message_type": "certificate_update", "data": {"seen": 1761350000, "leaf_cert": {"all_domains": ["abcbannk-login.com", "www.abcbannk-login.com"]}}}
+{"message_type": "certificate_update", "data": {"seen": 1761350005, "leaf_cert": {"all_domains": ["paypa1-secure-login.xyz"]}}}
+{"message_type": "certificate_update", "data": {"seen": 1761350009, "leaf_cert": {"all_domains": ["abcbank.com", "www.abcbank.com"]}}}
+{"message_type": "certificate_update", "data": {"seen": 1761350012, "leaf_cert": {"all_domains": ["pizza-shop.com"]}}}
+this is not json
+{"message_type": "certificate_update", "data": {"seen": 1761350015, "leaf_cert": {"all_domains": ["*.abcbankhelp.com"]}}}
+{"message_type": "certificate_update", "data": {"seen": 1761350020, "leaf_cert": {"all_domains": ["abcbank-help.in"]}}}
+{"message_type": "certificate_update", "data": {"seen": 1761350025, "leaf_cert": {"all_domains": ["login.abcbank.com.evil-host.top"]}}}
+{"message_type": "heartbeat"}
+{"message_type": "certificate_update", "data": {"seen": 1761350030, "leaf_cert": {"all_domains": ["acme-support.click"]}}}
+{"message_type": "certificate_update", "data": {"seen": 1761350031, "leaf_cert": {"all_domains": ["myblog.example.org", "cats.example.net"]}}}
+{"message_type": "certificate_update", "data": {"seen": 1761350040, "leaf_cert": {"all_domains": ["abcbannk-login.com"]}}}
+{"message_type": "certificate_update", "data": {"seen": 1761350041, "leaf_cert": {"all_domains": ["rnicrosoft.com"]}}}
+{"message_type": "certificate_update", "data": {"seen": 1761350045, "leaf_cert": {"all_domains": ["xn--pypal-4ve.com"]}}}
+{"message_type": "certificate_update", "data": {"seen": 1761350050, "leaf_cert": {"all_domains": ["paypal.com"]}}}
+{"message_type": "certificate_update", "data": {"seen": 1761350400, "leaf_cert": {"all_domains": ["acme-retail-login.example", "www.acme-retail-login.example"]}}}

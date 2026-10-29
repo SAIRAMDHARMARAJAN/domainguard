@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DomainGuard checker</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main>
+    <h1>Is this link safe?</h1>
+    <p class="lead">Paste a link or a suspicious message. DomainGuard reads the text only and never opens the link.</p>
+    <div class="tabs" role="tablist">
+      <button id="tab-check" role="tab" aria-selected="true" aria-controls="panel-check">Check a link</button>
+      <button id="tab-scan" role="tab" aria-selected="false" aria-controls="panel-scan">Scan a message</button>
+    </div>
+    <section id="panel-check" role="tabpanel">
+      <form id="form-check">
+        <label for="input">Link or domain</label>
+        <input id="input" type="text" maxlength="2048" autocomplete="off" required placeholder="example-bank-login.com">
+        <button type="submit">Check</button>
+      </form>
+    </section>
+    <section id="panel-scan" role="tabpanel" hidden>
+      <form id="form-scan">
+        <label for="text">Paste the SMS or email text</label>
+        <textarea id="text" rows="6" maxlength="10000" required></textarea>
+        <button type="submit">Scan message</button>
+      </form>
+    </section>
+    <label class="inline">Explain in <select id="language"></select></label>
+    <div id="results" aria-live="polite"></div>
+    <p class="fine">Results are automated risk estimates from public data, not confirmed verdicts. Your text is not stored.
+      <a href="/register">Protect your brand</a> · <span id="dispute"></span></p>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>

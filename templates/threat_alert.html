@@ -1,0 +1,27 @@
+<!doctype html>
+<html><body style="font-family:Arial,sans-serif;color:#1d1d1b;max-width:620px">
+<p>Hello ${company_name},</p>
+<p>A domain matching your protected brand has been detected:</p>
+<table cellpadding="6" style="border-collapse:collapse">
+<tr><td><b>Domain</b></td><td>${domain}</td></tr>
+<tr><td><b>Risk Level</b></td><td>${classification} (Score: ${score}/100)</td></tr>
+<tr><td><b>Detected At</b></td><td>${detected_at}</td></tr>
+<tr><td><b>Age</b></td><td>${age}</td></tr>
+</table>
+<p><b>Warning Signs</b></p>
+<ul>${reasons_html}</ul>
+<p><b>What you should do</b></p>
+<ol>
+<li>Do NOT click the link or enter credentials.</li>
+<li>Monitor for phishing reports.</li>
+<li>Consider filing an abuse report with the registrar.</li>
+<li>Notify your security team.</li>
+</ol>
+<p><b>More details:</b> <a href="${check_url}">${check_url}</a></p>
+<p><b>FAQ</b><br>
+Why did I get this alert? Your company registered ${protected_domain} for protection.<br>
+Is this a false alarm? This is an automated risk estimate, not a confirmed verdict. Please verify before acting.</p>
+<p>Manage notifications: <a href="${settings_url}">settings</a> | <a href="${unsubscribe_url}">unsubscribe from alerts</a></p>
+<p>Best regards,<br>DomainGuard Security Team</p>
+<hr><p style="font-size:12px;color:#5d5d58">This is an automated alert. Do not reply to this email.</p>
+</body></html>

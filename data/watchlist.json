@@ -1,0 +1,75 @@
+[
+  {
+    "name": "google",
+    "aliases": [
+      "Google"
+    ],
+    "official_domains": [
+      "google.com",
+      "google.co.in"
+    ]
+  },
+  {
+    "name": "microsoft",
+    "aliases": [
+      "Microsoft",
+      "Office365"
+    ],
+    "official_domains": [
+      "microsoft.com",
+      "office.com"
+    ]
+  },
+  {
+    "name": "netflix",
+    "aliases": [
+      "Netflix"
+    ],
+    "official_domains": [
+      "netflix.com"
+    ]
+  },
+  {
+    "name": "apple",
+    "aliases": [
+      "Apple",
+      "iCloud"
+    ],
+    "official_domains": [
+      "apple.com",
+      "icloud.com"
+    ]
+  },
+  {
+    "name": "amazon",
+    "aliases": [
+      "Amazon",
+      "AWS"
+    ],
+    "official_domains": [
+      "amazon.com",
+      "amazon.in"
+    ]
+  },
+  {
+    "name": "paypal",
+    "aliases": [
+      "PayPal",
+      "pay pal"
+    ],
+    "official_domains": [
+      "paypal.com"
+    ]
+  },
+  {
+    "name": "abcbank",
+    "aliases": [
+      "abc bank",
+      "ABC Bank"
+    ],
+    "official_domains": [
+      "abcbank.com",
+      "abcbank.in"
+    ]
+  }
+]

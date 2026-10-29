@@ -1,0 +1,4 @@
+# fictional sample feed
+http://paypa1-secure-login.xyz/verify
+https://abcbannk-login.com/signin.php
+http://totally-unrelated-bad-site.top/x

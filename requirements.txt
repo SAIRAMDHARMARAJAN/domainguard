@@ -1,0 +1,10 @@
+snowflake-connector-python>=3.10   # Snowflake (required in production)
+websockets>=12                     # CertStream live mode
+rapidfuzz>=3                       # optional; falls back to difflib
+fastapi>=0.110
+uvicorn>=0.27
+pydantic>=2
+streamlit>=1.40
+pandas>=2
+pytest>=8
+httpx>=0.27                        # FastAPI TestClient

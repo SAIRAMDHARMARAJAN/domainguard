@@ -1,0 +1,33 @@
+-- DomainGuard v7 / 02: Bronze, raw as ingested, with provenance. Transient: no Time Travel cost.
+USE DATABASE DOMAINGUARD;
+
+CREATE TRANSIENT TABLE IF NOT EXISTS BRONZE.CERTSTREAM_EVENTS (
+  DOMAIN       STRING,
+  BRAND        STRING,
+  MATCH_TYPE   STRING,          -- exact_token | contains | fuzzy
+  SIMILARITY   FLOAT,
+  SEEN_AT      TIMESTAMP_NTZ,
+  RAW          VARIANT,         -- {"domains_in_cert": n}
+  SOURCE_FILE  STRING,
+  LOADED_AT    TIMESTAMP_NTZ DEFAULT SYSDATE()
+) DATA_RETENTION_TIME_IN_DAYS = 0;
+
+CREATE TRANSIENT TABLE IF NOT EXISTS BRONZE.BLOCKLIST_FEED (
+  DOMAIN       STRING,
+  SOURCE       STRING,          -- openphish | urlhaus
+  URL          STRING,
+  LISTED_AT    TIMESTAMP_NTZ,   -- only when the feed states it
+  OBSERVED_AT  TIMESTAMP_NTZ,   -- when DomainGuard first saw it
+  SOURCE_FILE  STRING,
+  LOADED_AT    TIMESTAMP_NTZ DEFAULT SYSDATE()
+) DATA_RETENTION_TIME_IN_DAYS = 0;
+
+CREATE TRANSIENT TABLE IF NOT EXISTS BRONZE.RDAP_RESPONSES (
+  DOMAIN         STRING,
+  FETCHED_AT     TIMESTAMP_NTZ,
+  HTTP_STATUS    NUMBER,
+  REGISTERED_AT  TIMESTAMP_NTZ, -- NULL when unknown or redacted
+  PAYLOAD        VARIANT,       -- reduced RDAP JSON: no registrant or contact data
+  SOURCE_FILE    STRING,
+  LOADED_AT      TIMESTAMP_NTZ DEFAULT SYSDATE()
+) DATA_RETENTION_TIME_IN_DAYS = 0;
