@@ -19,6 +19,12 @@ def check_environment(settings, wh) -> dict:
     add("snowflake settings", not missing, "missing: " + ", ".join(missing) if missing else "present")
     add("secret key (unsubscribe links)", bool(settings.secret_key), "" if settings.secret_key else "set DG_SECRET_KEY")
     add("smtp settings", bool(settings.smtp_host), "" if settings.smtp_host else "alerts disabled until SMTP_HOST is set")
+    if settings.smtp_host:
+        sender = (settings.smtp_from or "").strip().lower()
+        placeholder = sender.endswith(".example.com") or sender.endswith(".example.org") or sender.endswith(".example.net")
+        add("smtp sender address", bool(sender) and not placeholder,
+            "SMTP_FROM uses a placeholder domain; set a Brevo-verified sender address"
+            if placeholder else ("set SMTP_FROM" if not sender else ""))
     add("llm settings", bool(settings.openrouter_api_key), "template explanations only" if not settings.openrouter_api_key else "")
     if not missing:
         try:

@@ -34,6 +34,8 @@ class Warehouse:
     def active_protected_rows(self) -> list[dict]: raise NotImplementedError
     def get_user(self, company_id: str) -> dict | None: raise NotImplementedError
     def get_user_by_email(self, email: str) -> dict | None: raise NotImplementedError
+    def get_user_by_name(self, name: str) -> dict | None: raise NotImplementedError
+    def domain_registered(self, domain: str) -> bool: raise NotImplementedError
     def user_by_key_hash(self, key_hash: str) -> dict | None: raise NotImplementedError
     def create_user(self, user: dict) -> None: raise NotImplementedError
     def update_user(self, company_id: str, fields: dict) -> None: raise NotImplementedError
@@ -42,6 +44,7 @@ class Warehouse:
     def protected_for(self, company_id: str, include_removed: bool = False) -> list[dict]: raise NotImplementedError
     def remove_protected(self, company_id: str, domain: str) -> None: raise NotImplementedError
     def put_verification(self, row: dict) -> None: raise NotImplementedError
+    def pending_verification(self, company_id: str) -> dict | None: raise NotImplementedError
     def get_verification(self, token_hash: str) -> dict | None: raise NotImplementedError
     def update_verification(self, token_hash: str, fields: dict) -> None: raise NotImplementedError
 
@@ -108,7 +111,8 @@ class SnowflakeWarehouse(Warehouse):
                 self._conn = snowflake.connector.connect(
                     account=s.sf_account, user=s.sf_user, password=s.sf_password, role=s.sf_role,
                     warehouse=s.sf_warehouse, database=s.sf_database, login_timeout=int(s.sf_timeout_s),
-                    network_timeout=int(s.sf_timeout_s), client_session_keep_alive=False)
+                    network_timeout=int(s.sf_timeout_s), client_session_keep_alive=False,
+                    enable_server_session_keep_alive_auto_detection=False)
         return self._conn
 
     def reset(self) -> None:
@@ -191,6 +195,14 @@ class SnowflakeWarehouse(Warehouse):
         r = self._rows(self._USER_SQL + "WHERE LOWER(EMAIL) = LOWER(%s)", (email,))
         return self._user(r[0]) if r else None
 
+    def get_user_by_name(self, name):
+        r = self._rows(self._USER_SQL + "WHERE LOWER(TRIM(NAME)) = LOWER(TRIM(%s))", (name,))
+        return self._user(r[0]) if r else None
+
+    def domain_registered(self, domain):
+        return bool(self._rows("SELECT 1 FROM REF.PROTECTED_DOMAINS WHERE LOWER(DOMAIN) = LOWER(%s) LIMIT 1",
+                               (domain,)))
+
     def user_by_key_hash(self, key_hash):
         r = self._rows(self._USER_SQL + "WHERE API_KEY_HASH = %s", (key_hash,))
         return self._user(r[0]) if r else None
@@ -245,22 +257,39 @@ class SnowflakeWarehouse(Warehouse):
                   (company_id, domain))
 
     def put_verification(self, row):
-        self._run("INSERT INTO OPS.REGISTRATION_VERIFICATION (COMPANY_ID, EMAIL, VERIFICATION_TOKEN, CREATED_AT, EXPIRES_AT) "
-                  "SELECT %s, %s, %s, SYSDATE(), TO_TIMESTAMP_NTZ(%s, " + TS + ")",
-                  (row["company_id"], row["email"], row["token_hash"], row["expires_at"]))
+        self._run("INSERT INTO OPS.REGISTRATION_VERIFICATION (COMPANY_ID, EMAIL, VERIFICATION_TOKEN, CREATED_AT, EXPIRES_AT, OTP_ATTEMPTS) "
+                  "SELECT %s, %s, %s, SYSDATE(), TO_TIMESTAMP_NTZ(%s, " + TS + "), %s",
+                  (row["company_id"], row["email"], row["token_hash"], row["expires_at"], row.get("otp_attempts", 0)))
+
+    def pending_verification(self, company_id):
+        r = self._rows("SELECT COMPANY_ID, EMAIL, EXPIRES_AT, VERIFIED_AT, OTP_ATTEMPTS "
+                       "FROM OPS.REGISTRATION_VERIFICATION "
+                       "WHERE COMPANY_ID = %s AND VERIFIED_AT IS NULL "
+                       "ORDER BY CREATED_AT DESC LIMIT 1", (company_id,))
+        if not r:
+            return None
+        return {"company_id": r[0][0], "email": r[0][1], "expires_at": str(r[0][2]),
+                "verified_at": r[0][3], "otp_attempts": r[0][4] or 0}
 
     def get_verification(self, token_hash):
-        r = self._rows("SELECT COMPANY_ID, EMAIL, EXPIRES_AT, VERIFIED_AT FROM OPS.REGISTRATION_VERIFICATION "
+        r = self._rows("SELECT COMPANY_ID, EMAIL, EXPIRES_AT, VERIFIED_AT, OTP_ATTEMPTS FROM OPS.REGISTRATION_VERIFICATION "
                        "WHERE VERIFICATION_TOKEN = %s", (token_hash,))
         if not r:
             return None
-        return {"company_id": r[0][0], "email": r[0][1], "expires_at": str(r[0][2]), "verified_at": r[0][3]}
+        return {"company_id": r[0][0], "email": r[0][1], "expires_at": str(r[0][2]), "verified_at": r[0][3],
+                "otp_attempts": r[0][4] or 0}
 
     def update_verification(self, token_hash, fields):
-        if set(fields) - {"verified_at"}:
-            raise ValueError("only verified_at can be updated")
-        self._run("UPDATE OPS.REGISTRATION_VERIFICATION SET VERIFIED_AT = SYSDATE() WHERE VERIFICATION_TOKEN = %s",
-                  (token_hash,))
+        if set(fields) - {"verified_at", "otp_attempts"}:
+            raise ValueError("only verification status and attempts can be updated")
+        assignments, params = [], []
+        if "verified_at" in fields:
+            assignments.append("VERIFIED_AT = SYSDATE()")
+        if "otp_attempts" in fields:
+            assignments.append("OTP_ATTEMPTS = %s")
+            params.append(fields["otp_attempts"])
+        self._run(f"UPDATE OPS.REGISTRATION_VERIFICATION SET {', '.join(assignments)} "
+                  "WHERE VERIFICATION_TOKEN = %s", (*params, token_hash))
 
     # --- bronze and load log --------------------------------------------------------------------------------
     _BRONZE = {
@@ -384,8 +413,8 @@ class SnowflakeWarehouse(Warehouse):
             "MERGE INTO GOLD.DOMAIN_VERDICT t USING (SELECT %s AS DOMAIN, %s AS COMPANY_ID, %s AS SCORE, %s AS CLASSIFICATION, "
             "%s AS MATCHED_BRAND, %s AS MATCH_TYPE, %s AS SIMILARITY, PARSE_JSON(%s) AS EVIDENCE, PARSE_JSON(%s) AS BREAKDOWN, "
             "%s AS IS_ON_BLOCKLIST, PARSE_JSON(%s) AS BLOCKLIST_SOURCES, %s AS AGE_DAYS, TO_TIMESTAMP_NTZ(%s, " + TS + ") AS EVALUATED, "
-            "TRY_TO_TIMESTAMP_NTZ(%s, " + TS + ") AS FIRST_SEEN, TRY_TO_TIMESTAMP_NTZ(%s, " + TS + ") AS FIRST_LISTED, "
-            "TRY_TO_TIMESTAMP_NTZ(%s, " + TS + ") AS REGISTERED, %s AS SCORING_VERSION, %s AS FLAGGED) s "
+            "TRY_TO_TIMESTAMP_NTZ(%s::STRING, " + TS + ") AS FIRST_SEEN, TRY_TO_TIMESTAMP_NTZ(%s::STRING, " + TS + ") AS FIRST_LISTED, "
+            "TRY_TO_TIMESTAMP_NTZ(%s::STRING, " + TS + ") AS REGISTERED, %s AS SCORING_VERSION, %s AS FLAGGED) s "
             "ON t.DOMAIN = s.DOMAIN AND t.COMPANY_ID = s.COMPANY_ID "
             "WHEN MATCHED THEN UPDATE SET SCORE = s.SCORE, CLASSIFICATION = s.CLASSIFICATION, MATCHED_BRAND = s.MATCHED_BRAND, "
             "MATCH_TYPE = s.MATCH_TYPE, SIMILARITY = s.SIMILARITY, EVIDENCE = s.EVIDENCE, BREAKDOWN = s.BREAKDOWN, "

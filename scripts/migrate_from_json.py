@@ -31,6 +31,8 @@ def plan(rows: list[dict]) -> list[dict]:
 
 
 if __name__ == "__main__":
+    from domainguard.cli import _load_dotenv
+    _load_dotenv()
     path = Path(next((a for a in sys.argv[1:] if not a.startswith("--")), "data/watchlist.json"))
     items = plan(json.loads(path.read_text()))
     if "--dry-run" in sys.argv:

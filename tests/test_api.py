@@ -64,10 +64,19 @@ def test_check_observed_domain_returns_stored_verdict_without_company_name(env):
     assert "cid-paypal" not in str(r) and "paypal@" not in str(r)  # which company is never revealed
     assert r["explanation"]["source"] == "template" and "not a confirmed verdict" in r["disclaimer"].lower()
 
+    # GET /check handles direct browser clicks and API queries
+    r_json = env["client"].get("/check?domain=paypa1-secure-login.xyz", headers={"Accept": "application/json"})
+    assert r_json.status_code == 200
+    assert r_json.json()["verdict"] == "high_risk"
+    r_html = env["client"].get("/check?domain=paypa1-secure-login.xyz", headers={"Accept": "text/html"}, follow_redirects=False)
+    assert r_html.status_code == 303
+    assert "/?check=" in r_html.headers["location"]
+
 
 def test_check_unseen_domain_is_name_only_with_caution_for_lookalikes(env):
     r = env["client"].post("/check", json={"input": "paypal-verify-now.xyz"}).json()
-    assert r["basis"] == "name_only_analysis" and r["age_known"] is False
+    assert r["basis"] == "name_and_reputation_analysis" and r["age_known"] is False
+    assert r["validation"]["reputation_status"] == "not_configured"
     assert r["verdict"] in ("suspicious", "high_risk", "low_risk")
 
 
@@ -135,30 +144,42 @@ def test_pages_are_served(env):
 
 
 # ---- registration ------------------------------------------------------------------------------
-def test_register_returns_pending_and_emails_link_without_revealing_status(env):
+def test_register_returns_pending_and_emails_otp_without_revealing_status(env):
     r = env["client"].post("/register", json={"company_name": "Acme Retail", "email": "owner@acme.example",
                                               "domains": ["acme.example"]})
     assert r.status_code == 202 and r.json()["status"] == "PENDING"
-    assert "verify" in env["sender"].sent[-1].get_content()
+    assert "verification code" in env["sender"].sent[-1].get_body(preferencelist=("plain",)).get_content()
+
+
+def test_register_keeps_pending_when_smtp_delivery_fails(env):
+    env["sender"].fail = True
+    r = env["client"].post("/register", json={"company_name": "SMTP Failure", "email": "smtp-failure@acme.example",
+                                              "domains": ["smtp-failure.example"]})
+    assert r.status_code == 202
+    assert r.json()["status"] == "PENDING"
+    assert r.json()["verification_email_sent"] is False
+    assert "administrator can approve" in r.json()["message"]
 
 
 def test_register_duplicate_email_and_bad_input(env):
     body = {"company_name": "Acme", "email": "dup@acme.example", "domains": ["acme.example"]}
     assert env["client"].post("/register", json=body).status_code == 202
-    assert env["client"].post("/register", json=body).status_code == 422
+    duplicate = env["client"].post("/register", json=body)
+    assert duplicate.status_code == 202
+    assert duplicate.json()["verification_email_sent"] is True
+    assert "new verification code" in duplicate.json()["message"]
     assert env["client"].post("/register", json={**body, "email": "bad", "domains": []}).status_code == 422
 
 
-def test_verify_emails_key_and_settings_require_auth(env):
+def test_verify_otp_returns_key_and_settings_require_auth(env):
     reg = Registrar(env["wh"], clock=lambda: env["clock"]())
     out = reg.register(name="Acme", email="owner@acme.example", contact_person=None, domains=["acme.example"])
-    assert env["client"].get("/verify/not-a-real-token").status_code == 400
-    ok = env["client"].get(f"/verify/{out['token']}")
+    assert env["client"].get("/verify/not-a-real-token").status_code == 410
+    ok = env["client"].post("/verify-otp", json={"email": out["email"], "otp": out["otp"]})
     assert ok.status_code == 200 and ok.json()["status"] == "ACTIVE"
-    body = env["sender"].sent[-1].get_content()
-    key = next(w for w in body.split() if w.startswith("dg_"))
+    key = ok.json()["api_key"]
     assert key.startswith("dg_") and len(key) > 30
-    assert env["client"].get(f"/verify/{out['token']}").status_code == 400  # link works once
+    assert env["client"].post("/verify-otp", json={"email": out["email"], "otp": out["otp"]}).status_code == 400
     s = env["client"].get("/company/settings", headers=bearer(key)).json()
     assert s["name"] == "Acme" and s["domains"][0]["domain"] == "acme[.]example" and "api_key_hash" not in str(s)  # displayed defanged
     assert env["client"].get("/company/settings").status_code == 401

@@ -46,8 +46,12 @@ class RateLimiter:
         self._hits: dict[str, deque] = defaultdict(deque)
         self._lock = threading.Lock()
 
-    def check(self, key: str) -> float | None:
-        """None if allowed, otherwise the number of seconds to wait."""
+    def check(self, key: str, *, consume: bool = True) -> float | None:
+        """None if allowed, otherwise the number of seconds to wait.
+
+        Callers that need to validate an input before charging the quota can
+        use ``consume=False`` and call ``hit`` after the operation succeeds.
+        """
         now = self._clock()
         with self._lock:
             q = self._hits[key]
@@ -55,8 +59,18 @@ class RateLimiter:
                 q.popleft()
             if len(q) >= self.limit:
                 return max(0.1, self.window - (now - q[0]))
-            q.append(now)
+            if consume:
+                q.append(now)
             return None
+
+    def hit(self, key: str) -> None:
+        """Record one operation after it has passed validation."""
+        now = self._clock()
+        with self._lock:
+            q = self._hits[key]
+            while q and now - q[0] >= self.window:
+                q.popleft()
+            q.append(now)
 
 
 def unsubscribe_token(secret: str, company_id: str) -> str:

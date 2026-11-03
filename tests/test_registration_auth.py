@@ -24,13 +24,13 @@ def test_aliases_are_suggested_from_domain_and_name():
     assert "acme-retail" in a and "acme retail" in a and "acmeretail" in a
 
 
-def test_register_creates_pending_account_with_verification_token():
+def test_register_creates_pending_account_with_verification_otp():
     wh = MemoryWarehouse()
     out = Registrar(wh, clock=lambda: T0).register(**REG)
     u = wh.get_user(out["company_id"])
     assert u["status"] == "PENDING" and out["domains"] == ["acme-retail.example"]
     assert wh.protected_for(out["company_id"])[0]["brand_aliases"]  # aliases suggested
-    assert len(out["token"]) > 30
+    assert len(out["otp"]) == 6 and out["otp"].isdigit()
 
 
 @pytest.mark.parametrize("bad", [
@@ -50,6 +50,27 @@ def test_duplicate_email_refused():
         r.register(**{**REG, "domains": ["other.example"]})
 
 
+def test_duplicate_company_name_is_allowed():
+    wh = MemoryWarehouse()
+    r = Registrar(wh)
+    r.register(**REG)
+    second = r.register(**{**REG, "email": "different@example.com", "domains": ["other.example"]})
+    assert second["company_id"] != wh.get_user_by_email("security@acme-retail.example")["company_id"]
+
+
+def test_duplicate_domain_refused():
+    wh = MemoryWarehouse()
+    r = Registrar(wh)
+    r.register(**REG)
+    with pytest.raises(RegistrationError, match="domain"):
+        r.register(**{**REG, "name": "Another Company", "email": "different@example.com"})
+
+
+def test_duplicate_domains_in_one_registration_refused():
+    with pytest.raises(RegistrationError, match="duplicate domains"):
+        Registrar(MemoryWarehouse()).register(**{**REG, "domains": ["www.acme-retail.example", "acme-retail.example"]})
+
+
 def test_verify_activates_issues_key_once_and_link_cannot_be_reused():
     wh = MemoryWarehouse()
     r = Registrar(wh, clock=lambda: T0)
@@ -62,13 +83,40 @@ def test_verify_activates_issues_key_once_and_link_cannot_be_reused():
         r.verify(out["token"])
 
 
-def test_expired_and_unknown_links_refused():
+def test_resend_otp_creates_new_pending_registration_code():
+    wh = MemoryWarehouse()
+    r = Registrar(wh, clock=lambda: T0)
+    out = r.register(**REG)
+    resent = r.resend_otp(REG["email"])
+    assert resent["otp"] != out["otp"]
+    assert r.verify_otp(resent["otp"], REG["email"])["email"] == REG["email"]
+
+
+def test_admin_approval_activates_pending_registration_without_email():
+    wh = MemoryWarehouse()
+    r = Registrar(wh, clock=lambda: T0)
+    out = r.register(**REG)
+    approved = r.approve_pending(out["company_id"])
+    user = wh.get_user(out["company_id"])
+    assert user["status"] == "ACTIVE"
+    assert approved["api_key"].startswith("dg_")
+    with pytest.raises(RegistrationError, match="already been approved"):
+        r.verify(out["token"])
+
+
+def test_expired_and_unknown_otps_refused():
     wh = MemoryWarehouse()
     out = Registrar(wh, clock=lambda: T0).register(**REG)
     with pytest.raises(RegistrationError, match="expired"):
         Registrar(wh, clock=lambda: T0 + timedelta(hours=25)).verify(out["token"])
-    with pytest.raises(RegistrationError, match="not valid"):
-        Registrar(wh).verify("made-up-token")
+    with pytest.raises(RegistrationError, match="6-digit"):
+        Registrar(wh).verify("123")
+
+
+def test_verify_handles_naive_clock():
+    wh = MemoryWarehouse()
+    out = Registrar(wh, clock=lambda: T0.replace(tzinfo=None)).register(**REG)
+    assert Registrar(wh, clock=lambda: T0.replace(tzinfo=None)).verify(out["token"])["api_key"].startswith("dg_")
 
 
 def test_add_remove_domain_and_key_rotation_invalidates_old_key():
@@ -115,6 +163,15 @@ def test_key_rate_limiter_window():
     assert rl.check("k") is not None
     t["now"] = 61
     assert rl.check("k") is None
+
+
+def test_rate_limiter_can_validate_without_consuming_quota():
+    t = {"now": 0.0}
+    rl = RateLimiter(1, 60, clock=lambda: t["now"])
+    assert rl.check("k", consume=False) is None
+    assert rl.check("k", consume=False) is None
+    rl.hit("k")
+    assert rl.check("k", consume=False) is not None
 
 
 def test_unsubscribe_token_is_signed():

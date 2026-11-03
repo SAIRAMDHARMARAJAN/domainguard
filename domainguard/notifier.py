@@ -20,6 +20,7 @@ TEMPLATES = Path(__file__).resolve().parents[1] / "templates"
 SUBJECT = "⚠️ ALERT: Suspicious domain resembling your brand detected"
 FREQUENCY_DAYS = {"DAILY": 1, "WEEKLY": 7}
 MAX_AGE_FOR_IMMEDIATE = timedelta(hours=1)
+EMAIL_DELIVERY_ERRORS = (OSError, smtplib.SMTPException)
 
 
 class SMTPSender:
@@ -64,6 +65,10 @@ def _message(to: str, subject: str, text: str, html_body: str | None, from_addr:
     return msg
 
 
+def _branded(body: str) -> str:
+    return _render("email_shell.html", {"body_html": body})
+
+
 def _age_text(age_days: float | None) -> str:
     if age_days is None:
         return "unknown (registration data not available)"
@@ -97,7 +102,7 @@ def alert_message(settings, user: dict, v: dict, to: str, now: datetime) -> Emai
             f"More details: {values['check_url']}\nSettings: {values['settings_url']}\n"
             f"Unsubscribe from alerts: {values['unsubscribe_url']}\n\n"
             "This is an automated risk estimate, not a confirmed verdict. Do not reply to this email.\n")
-    return _message(to, SUBJECT, text, _render("threat_alert.html", values), settings.smtp_from)
+    return _message(to, SUBJECT, text, _branded(_render("threat_alert.html", values)), settings.smtp_from)
 
 
 def _log(wh, user_id, domain, to, v, status, kind, error=None):
@@ -134,7 +139,7 @@ def notify_new(wh, sender, settings, newly: list[dict], now: datetime | None = N
             sender.send(alert_message(settings, user, {**v, "protected_domain": v.get("matched_brand")}, to, now))
             _log(wh, v["company_id"], v["domain"], to, v, "SENT", "ALERT")
             out["sent"] += 1
-        except OSError as e:
+        except EMAIL_DELIVERY_ERRORS as e:
             _log(wh, v["company_id"], v["domain"], to, v, "FAILED", "ALERT", error=str(e)[:500])
             out["failed"] += 1
     return out
@@ -163,7 +168,13 @@ def flush_digests(wh, sender, settings, now: datetime | None = None) -> dict:
                         f"first flagged {v['first_flagged_at']}\n" for v in items)
         text = (f"Hello {user['name']},\n\nYour {prefs['notification_frequency'].lower()} summary of suspicious domains:\n\n"
                 f"{lines}\nThis is an automated risk estimate, not a confirmed verdict.\n")
-        msg = _message(to, SUBJECT, text, None, settings.smtp_from)
+        msg = _message(to, SUBJECT, text, _branded(
+            "<h2 style=\"margin-top:0;color:#102a43\">Your threat summary</h2>"
+            f"<p>Hello {html.escape(user['name'])},</p>"
+            f"<p>Your {html.escape(prefs['notification_frequency'].lower())} summary of suspicious domains:</p>"
+            f"<pre style=\"background:#f4f7fb;padding:16px;border-radius:8px;white-space:pre-wrap\">{html.escape(lines)}</pre>"
+            "<p style=\"color:#68788c;font-size:13px\">This is an automated risk estimate, not a confirmed verdict.</p>"
+        ), settings.smtp_from)
         try:
             sender.send(msg)
         except OSError as e:
@@ -178,21 +189,51 @@ def flush_digests(wh, sender, settings, now: datetime | None = None) -> dict:
     return out
 
 
-def send_verification(sender, settings, email: str, name: str, link_token: str) -> None:
-    url = f"{settings.web_domain.rstrip('/')}/verify/{link_token}"
-    text = (f"Hello {name},\n\nConfirm your email to activate DomainGuard alerts for your brand:\n{url}\n\n"
-            "This link expires in 24 hours and works once. If you did not register, ignore this email.\n")
-    sender.send(_message(email, "Confirm your DomainGuard registration", text, None, settings.smtp_from))
+def send_verification(sender, settings, email: str, name: str, otp: str) -> None:
+    text = (f"Hello {name},\n\nYour DomainGuard verification code is: {otp}\n\n"
+            "Enter this code on the DomainGuard registration page within 10 minutes. "
+            "It works once. If you did not register, ignore this email.\n")
+    body = (f"<h2 style=\"margin-top:0;color:#102a43\">Confirm your registration</h2>"
+            f"<p>Hello {html.escape(name)},</p>"
+            "<p>Enter this one-time code on the DomainGuard registration page:</p>"
+            f"<div style=\"background:#102a43;color:#ffffff;padding:16px;border-radius:8px;font-family:monospace;font-size:24px;letter-spacing:5px;text-align:center\">"
+            f"{html.escape(otp)}</div>"
+            "<p style=\"color:#68788c;font-size:13px\">This code expires in 10 minutes and works once. "
+            "If you did not register, you can safely ignore this email.</p>")
+    sender.send(_message(email, "Your DomainGuard verification code", text, _branded(body), settings.smtp_from))
 
 
-def send_api_key(sender, settings, email: str, name: str, api_key: str) -> None:
+def _legacy_send_api_key(sender, settings, email: str, name: str, api_key: str) -> None:
+    return send_api_key(sender, settings, email, name, api_key)
+
     text = (f"Hello {name},\n\nYour DomainGuard account is active. Your API key (shown only once; store it safely):\n\n"
             f"{api_key}\n\nUse it as:  Authorization: Bearer <key>\n\nIf you did not request this, rotate the key from "
             "your settings page right away.\n")
-    sender.send(_message(email, "Your DomainGuard API key", text, None, settings.smtp_from))
+    body = (f"<h2 style=\"margin-top:0;color:#102a43\">Your account is active</h2>"
+            f"<p>Hello {html.escape(name)},</p>"
+            "<p>Your DomainGuard API key is shown below. Store it safely; it will not be shown again.</p>"
+            f"<div style=\"background:#102a43;color:#ffffff;padding:16px;border-radius:8px;font-family:monospace;font-size:15px;word-break:break-all\">"
+            f"{html.escape(api_key)}</div>"
+            "<p style=\"font-size:13px;color:#68788c\">Use it as "
+            "<code>Authorization: Bearer &lt;your-api-key&gt;</code> when calling the company API.</p>"
+            "<p style=\"color:#a33b2f;font-size:13px\"><b>Security:</b> Never share this key publicly. "
+            "If you believe it was exposed, rotate it from your company settings.</p>")
+    sender.send(_message(email, "Your DomainGuard API key", text, _branded(body), settings.smtp_from))
+
+
+def send_api_key(sender, settings, email: str, name: str, api_key: str) -> None:
+    """Send an activation notice without placing the API secret in email."""
+    text = (f"Hello {name},\n\nYour DomainGuard account is active. "
+            "For your protection, your API key is never sent by email. "
+            "It is shown once in the secure HTTPS verification response.\n")
+    body = (f"<h2 style=\"margin-top:0;color:#102a43\">Your account is active</h2>"
+            f"<p>Hello {html.escape(name)},</p>"
+            "<p>For your protection, the API key is never included in email. "
+            "It is shown once in the secure HTTPS verification response.</p>")
+    sender.send(_message(email, "Your DomainGuard account is active", text, _branded(body), settings.smtp_from))
 
 
 def send_dispute_ack(sender, settings, email: str, domain: str) -> None:
-    body = _render("dispute_notification.html", {"domain": defang(domain)})
+    body = _branded(_render("dispute_notification.html", {"domain": defang(domain)}))
     text = f"We received a dispute about the result for {defang(domain)}. An analyst will review it.\n"
     sender.send(_message(email, "We received your dispute", text, body, settings.smtp_from))

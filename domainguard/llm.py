@@ -17,6 +17,41 @@ from .normalize import defang
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 MAX_SUMMARY, MAX_REASON, MAX_ADVICE, MAX_REASONS = 150, 100, 100, 8
 TEMPLATE_ADVICE = "Do not enter passwords or personal details. This is an automated risk estimate, not a confirmed verdict."
+
+# ---------------------------------------------------------------------------
+# Per-language template strings for deterministic (no-LLM) explanations.
+# Keys must match LANGUAGES in config.py exactly.
+# ---------------------------------------------------------------------------
+_LANG_TEMPLATES: dict[str, dict[str, str]] = {
+    "English": {
+        "summary": "{d} shows warning signs of imitating {brand} (risk score {score}/100).",
+        "advice": "Do not enter passwords or personal details. This is an automated risk estimate, not a confirmed verdict.",
+    },
+    "Hindi": {
+        "summary": "{d} डोमेन {brand} की नकल करने के संकेत दिखाता है (जोखिम स्कोर {score}/100)।",
+        "advice": "पासवर्ड या व्यक्तिगत विवरण न डालें। यह एक स्वचालित जोखिम मूल्यांकन है, पुष्टि किया गया निर्णय नहीं।",
+    },
+    "Tamil": {
+        "summary": "{d} என்ற டொமைன் {brand} நிறுவனத்தை போல் காட்சியளிக்கிறது (ஆபத்து மதிப்பெண் {score}/100).",
+        "advice": "கடவுச்சொற்கள் அல்லது தனிப்பட்ட விவரங்களை உள்ளிட வேண்டாம். இது ஒரு தானியங்கி மதிப்பீடு மட்டுமே, உறுதிப்படுத்தப்பட்ட தீர்ப்பு அல்ல.",
+    },
+    "Malayalam": {
+        "summary": "{d} എന്ന ഡൊമൈൻ {brand} ആണെന്ന് തോന്നിക്കുന്ന അപകട സൂചനകൾ കാണിക്കുന്നു (റിസ്ക് സ്കോർ {score}/100).",
+        "advice": "പാസ്‌വേഡുകളോ വ്യക്തിഗത വിവരങ്ങളോ നൽകരുത്. ഇത് ഒരു സ്വയംചാലിത റിസ്ക് വിലയിരുത്തൽ മാത്രമാണ്, സ്ഥിരീകരിച്ച വിധി അല്ല.",
+    },
+    "Telugu": {
+        "summary": "{d} డొమైన్ {brand}ని అనుకరిస్తున్న హెచ్చరిక సూచనలు చూపుతోంది (రిస్క్ స్కోర్ {score}/100).",
+        "advice": "పాస్‌వర్డ్‌లు లేదా వ్యక్తిగత వివరాలు నమోదు చేయవద్దు. ఇది స్వయంచాలక రిస్క్ అంచనా మాత్రమే, ధృవీకరించిన తీర్పు కాదు.",
+    },
+    "Bengali": {
+        "summary": "{d} ডোমেইনটি {brand}-এর অনুকরণ করার সতর্কতামূলক লক্ষণ দেখাচ্ছে (ঝুঁকির স্কোর {score}/100)।",
+        "advice": "পাসওয়ার্ড বা ব্যক্তিগত তথ্য প্রবেশ করবেন না। এটি একটি স্বয়ংক্রিয় ঝুঁকি মূল্যায়ন, নিশ্চিত রায় নয়।",
+    },
+    "Marathi": {
+        "summary": "{d} डोमेन {brand}ची नक्कल करण्याची चेतावणी चिन्हे दाखवतो (जोखीम गुण {score}/100).",
+        "advice": "पासवर्ड किंवा वैयक्तिक माहिती टाकू नका. हे एक स्वयंचलित जोखीम मूल्यांकन आहे, पुष्टी केलेला निर्णय नाही.",
+    },
+}
 PROMPT = """You are a security analyst explaining domain risk scores to non-technical users.
 
 Domain: {domain}
@@ -51,9 +86,13 @@ _CODE = re.compile(r"[`<>{}]")
 def template_explanation(verdict: dict, language: str = "English") -> dict:
     d = defang(verdict["domain"])
     brand = verdict.get("matched_brand") or "a protected brand"
-    return {"summary": f"{d} shows warning signs of imitating {brand} (risk score {verdict['score']}/100).",
+    # Use the language-specific template; fall back to English if somehow unsupported.
+    tmpl = _LANG_TEMPLATES.get(language, _LANG_TEMPLATES["English"])
+    summary = tmpl["summary"].format(d=d, brand=brand, score=verdict["score"])
+    advice = tmpl["advice"]
+    return {"summary": summary,
             "reasons": [r[:MAX_REASON] for r in (verdict.get("evidence") or [])][:MAX_REASONS],
-            "advice": TEMPLATE_ADVICE, "source": "template", "model_name": None, "language": "English"}
+            "advice": advice, "source": "template", "model_name": None, "language": language}
 
 
 def facts(verdict: dict) -> dict:

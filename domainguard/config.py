@@ -54,6 +54,13 @@ class Settings:
     dispute_url: str = ""
     analyst_token: str = ""          # placeholder for dashboard / analyst access
     secret_key: str = ""             # signs unsubscribe links; required in production
+    turnstile_site_key: str = ""
+    turnstile_secret_key: str = ""
+    captcha_timeout_s: float = 5.0
+    registration_rate_limit_per_hour: int = 5
+    otp_rate_limit_per_hour: int = 10
+    virustotal_api_key: str = ""
+    reputation_timeout_s: float = 6.0
     log_level: str = "INFO"
     extra: dict = field(default_factory=dict)
 
@@ -80,6 +87,13 @@ class Settings:
             api_key_rate_limit_per_min=int(g("API_KEY_RATE_LIMIT_PER_MIN", "1000")),
             web_domain=g("WEB_DOMAIN", cls.web_domain), public_origin=g("PUBLIC_ORIGIN"),
             dispute_url=g("DG_DISPUTE_URL"), analyst_token=g("DG_ANALYST_TOKEN"), secret_key=g("DG_SECRET_KEY"),
+            virustotal_api_key=g("VIRUSTOTAL_API_KEY"),
+            reputation_timeout_s=float(g("REPUTATION_TIMEOUT_S", "6")),
+            turnstile_site_key=g("TURNSTILE_SITE_KEY"),
+            turnstile_secret_key=g("TURNSTILE_SECRET_KEY"),
+            captcha_timeout_s=float(g("CAPTCHA_TIMEOUT_S", "5")),
+            registration_rate_limit_per_hour=int(g("REGISTRATION_RATE_LIMIT_PER_HOUR", "5")),
+            otp_rate_limit_per_hour=int(g("OTP_RATE_LIMIT_PER_HOUR", "10")),
             log_level=g("LOG_LEVEL", "INFO"),
         )
 

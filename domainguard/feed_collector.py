@@ -22,13 +22,15 @@ class FeedSource:
 
 
 class FeedCollector:
-    def __init__(self, sources: list[FeedSource], writer, *, fetch=feeds.fetch_text, state_dir, clock=time.time):
+    def __init__(self, sources: list[FeedSource], writer, *, fetch=feeds.fetch_text, state_dir,
+                 accept=None, clock=time.time):
         self.sources = sources
         self.writer = writer
         self.fetch = fetch
         self.state_dir = Path(state_dir)
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self._clock = clock
+        self.accept = accept or (lambda row: True)
         self._state_path = self.state_dir / "feeds_state.json"
         self.state: dict = json.loads(self._state_path.read_text()) if self._state_path.exists() else {}
 
@@ -56,12 +58,14 @@ class FeedCollector:
             try:
                 observed = datetime.fromtimestamp(now, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
                 rows = feeds.parse_url_list(self.fetch(src.url, src.headers), src.name, observed_at=observed)
+                accepted = [r for r in rows if self.accept(r)]
                 seen = self._load_seen(src.name)
-                new = [r for r in rows if r["domain"] not in seen]
+                new = [r for r in accepted if r["domain"] not in seen]
                 self.writer.write_batch("blocklist", new)  # stage first, then remember
-                self._atomic(self._seen_path(src.name), "\n".join(sorted(seen | {r["domain"] for r in rows})))
+                self._atomic(self._seen_path(src.name), "\n".join(sorted(seen | {r["domain"] for r in accepted})))
                 st.update(failures=0, next_run=now + src.min_interval_s, last_ok=now, last_error=None)
-                result[src.name] = {"status": "ok", "new": len(new), "total": len(rows)}
+                result[src.name] = {"status": "ok", "new": len(new), "total": len(rows),
+                                    "watchlist_matches": len(accepted)}
             except Exception as e:
                 st["failures"] += 1
                 st["next_run"] = now + min(src.min_interval_s * 2 ** st["failures"], MAX_BACKOFF_S)

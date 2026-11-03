@@ -74,15 +74,16 @@ def test_digest_sent_once_per_interval(tmp_path):
     sender = RecordingSender()
     assert notify_new(wh, sender, s, newly, T0)["queued_for_digest"] == 1 and sender.sent == []
     out = flush_digests(wh, sender, s, T0)
-    assert out["digests_sent"] == 1 and "Your daily summary" in sender.sent[0].get_content()
+    assert out["digests_sent"] == 1 and "Your daily summary" in sender.sent[0].get_body(preferencelist=("plain",)).get_content()
     assert flush_digests(wh, sender, s, T0 + timedelta(hours=5))["digests_sent"] == 0
     assert flush_digests(wh, sender, s, T0 + timedelta(days=1, minutes=1))["digests_sent"] == 0  # all already alerted
 
 
-def test_account_emails_carry_links_and_key_once(tmp_path):
+def test_account_emails_carry_otp_and_never_api_key(tmp_path):
     s = settings(tmp_path)
     sender = RecordingSender()
-    send_verification(sender, s, "a@b.test", "Acme", "tok123")
-    assert "https://dg.example.test/verify/tok123" in sender.sent[0].get_content()
+    send_verification(sender, s, "a@b.test", "Acme", "123456")
+    assert "123456" in sender.sent[0].get_body(preferencelist=("plain",)).get_content()
     send_api_key(sender, s, "a@b.test", "Acme", "dg_secretvalue")
-    assert "dg_secretvalue" in sender.sent[1].get_content() and "shown only once" in sender.sent[1].get_content()
+    body = sender.sent[1].get_body(preferencelist=("plain",)).get_content()
+    assert "dg_secretvalue" not in body and "never sent by email" in body

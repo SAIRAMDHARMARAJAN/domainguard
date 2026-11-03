@@ -28,13 +28,15 @@ from .config import Settings
 
 def _load_dotenv(path=".env") -> None:
     p = Path(path)
-    if p.is_file():
-        import os
-        for line in p.read_text().splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, v = line.split("=", 1)
-                os.environ.setdefault(k.strip(), v.strip().strip('"'))
+    if not p.is_file():
+        return
+
+    import os
+    for line in p.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip().strip('"'))
 
 
 def main(argv=None) -> int:

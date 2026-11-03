@@ -17,11 +17,15 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .auth import AuthError, RateLimiter, authenticate, verify_unsubscribe
+from .captcha import CaptchaError, verify_turnstile
 from .config import LANGUAGES, Settings
+from .domain_validation import validate_registered_domain
 from .llm import explain, message_tactics, template_explanation
 from .normalize import clean_host, defang, extract_hosts, split_host
-from .notifier import send_api_key, send_dispute_ack, send_verification
+from .news import fetch_articles
+from .notifier import EMAIL_DELIVERY_ERRORS, send_dispute_ack, send_verification
 from .registration import Registrar, RegistrationError
+from .reputation import infrastructure_checks, virustotal_lookup
 from .scoring import score_domain
 from .watchlist import WarehouseWatchlist
 
@@ -36,6 +40,11 @@ SEVERITY = ["official", "low_risk", "suspicious", "high_risk", "dangerous", "no_
 HEADERS = {"Content-Security-Policy": "default-src 'self'; frame-ancestors 'none'; base-uri 'none'",
            "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
            "Strict-Transport-Security": "max-age=31536000"}
+
+
+def _url_quote(s: str) -> str:
+    safe = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.~")
+    return "".join(c if c in safe else f"%{ord(c):02X}" for c in s)
 
 
 class CheckIn(BaseModel):
@@ -54,6 +63,13 @@ class RegisterIn(BaseModel):
     contact_person: str | None = Field(default=None, max_length=120)
     domains: list[str] = Field(min_length=1, max_length=20)
     aliases: list[str] = Field(default_factory=list, max_length=20)
+    captcha_token: str | None = Field(default=None, max_length=4096)
+
+
+class VerifyOtpIn(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    otp: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
+    captcha_token: str | None = Field(default=None, max_length=4096)
 
 
 class SettingsIn(BaseModel):
@@ -75,14 +91,16 @@ class DisputeIn(BaseModel):
 
 
 def create_app(wh, settings: Settings, *, sender=None, clock=lambda: datetime.now(timezone.utc),
-               llm_caller=None, watchlist=None) -> FastAPI:
+               llm_caller=None, watchlist=None, domain_checker=None) -> FastAPI:
     if not settings.secret_key:
         raise RuntimeError("DG_SECRET_KEY must be set (it signs unsubscribe links)")
     app = FastAPI(title="DomainGuard", docs_url=None, redoc_url=None, openapi_url=None)
     wl_cache = watchlist or WarehouseWatchlist(wh, ttl_s=settings.watchlist_ttl_s)
     public = RateLimiter(settings.api_rate_limit_per_min)
     keyed = RateLimiter(settings.api_key_rate_limit_per_min)
-    registrar = Registrar(wh, clock=clock)
+    registrations = RateLimiter(settings.registration_rate_limit_per_hour, 3600)
+    otp_checks = RateLimiter(settings.otp_rate_limit_per_hour, 3600)
+    registrar = Registrar(wh, clock=clock, domain_checker=domain_checker)
     if settings.public_origin:
         app.add_middleware(CORSMiddleware, allow_origins=[settings.public_origin], allow_methods=["GET", "POST", "PUT", "DELETE"],
                            allow_headers=["Authorization", "Content-Type"], allow_credentials=False)
@@ -116,12 +134,21 @@ def create_app(wh, settings: Settings, *, sender=None, clock=lambda: datetime.no
             raise HTTPException(422, f"language must be one of: {', '.join(LANGUAGES)}")
         return lang
 
+    def deliver(send, unavailable_message: str):
+        try:
+            send()
+        except EMAIL_DELIVERY_ERRORS:
+            log.exception("email delivery failed")
+            raise HTTPException(503, unavailable_message)
+
     def now_iso() -> str:
         return clock().astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     def assess(host: str, lang: str) -> dict:
         registrable = split_host(host).registrable
         stored = wh.get_verdict(host) or wh.get_verdict(registrable)
+        infra = {"points": 0, "evidence": []}
+        reputation = {"status": "not_checked", "points": 0, "evidence": []}
         if stored:
             brief = wh.get_brief(stored["domain"], stored["company_id"], lang)
             brief = brief if brief and brief.get("verdict_score") == stored["score"] else None  # stale briefs are ignored
@@ -129,14 +156,26 @@ def create_app(wh, settings: Settings, *, sender=None, clock=lambda: datetime.no
                     if brief else template_explanation(stored, lang))
             v, basis, age_known = stored, "observed_in_stream", stored.get("age_days") is not None
         else:
-            v = score_domain(host, wl_cache.current(), age_days=None, on_blocklist=False, now=clock()).to_dict()
+            infra = infrastructure_checks(host)
+            reputation = virustotal_lookup(
+                f"https://{host}", settings.virustotal_api_key, settings.reputation_timeout_s
+            )
+            v = score_domain(
+                host, wl_cache.current(), age_days=None, on_blocklist=False, now=clock(),
+                reputation_points=infra["points"] + reputation["points"],
+                reputation_evidence=infra["evidence"] + reputation["evidence"],
+            ).to_dict()
             expl = explain(v, lang, models=(), caller=llm_caller)
-            basis, age_known = "name_only_analysis", False
+            basis, age_known = "name_and_reputation_analysis", False
         label = VERDICT[v["classification"]]
         note = CAUTION if label == "low_risk" and v.get("matched_brand") else None
         return {"domain": defang(v["domain"]), "verdict": label, "score": v["score"],
                 "matched_brand": v.get("matched_brand"), "reasons": v.get("evidence") or [], "explanation": expl,
-                "basis": basis, "age_known": age_known, "note": note, "disclaimer": DISCLAIMER}
+                "basis": basis, "age_known": age_known,
+                "validation": {"infrastructure_points": infra["points"],
+                               "reputation_status": reputation["status"],
+                               "reputation_points": reputation["points"]},
+                "note": note, "disclaimer": DISCLAIMER}
 
     # ---- public -------------------------------------------------------------------------------------
     @app.get("/health")
@@ -147,11 +186,49 @@ def create_app(wh, settings: Settings, *, sender=None, clock=lambda: datetime.no
     def config():
         return {"languages": list(LANGUAGES), "dispute_url": settings.dispute_url}
 
+    @app.get("/safety/feed")
+    def safety_feed(request: Request, limit: int = 8):
+        ip_limit(request)
+        limit = max(1, min(limit, 12))
+        rows = wh.inbox(min_score=70, limit=50)
+        threats = [{"domain": defang(r["domain"]), "verdict": VERDICT.get(r["classification"], "suspicious"),
+                    "score": r["score"], "first_flagged_at": r.get("first_flagged_at")}
+                   for r in rows if r.get("classification") in ("SUSPICIOUS", "HIGH_RISK", "DANGEROUS")]
+        return {"threats": threats, "articles": fetch_articles(limit=limit),
+                "precautions": [
+                    "Never sign in through a link received unexpectedly by email or SMS.",
+                    "Check the full domain spelling before entering credentials or payment details.",
+                    "Use a password manager and multi-factor authentication where available.",
+                    "Do not share one-time passwords, recovery codes, or card PINs with anyone.",
+                    "Report suspected fraud to your bank and the relevant official authority.",
+                ]}
+
+    @app.get("/safety", response_class=HTMLResponse)
+    def safety_page():
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url="/", status_code=307)
+
     @app.post("/check")
     def check(body: CheckIn, request: Request):
         ip_limit(request)
         lang = language(body.language)
         host = clean_host(body.input)
+        if host is None:
+            raise HTTPException(422, "that does not look like a valid domain or link")
+        return assess(host, lang)
+
+    @app.get("/check")
+    def check_get(request: Request, domain: str | None = None, input: str | None = None, language_name: str = "English"):
+        ip_limit(request)
+        target = domain or input
+        if not target:
+            raise HTTPException(422, "missing domain or input parameter")
+        accept = request.headers.get("accept", "")
+        if "text/html" in accept and "application/json" not in accept:
+            from fastapi.responses import RedirectResponse
+            return RedirectResponse(url=f"/?check={_url_quote(target)}", status_code=303)
+        lang = language(language_name)
+        host = clean_host(target)
         if host is None:
             raise HTTPException(422, "that does not look like a valid domain or link")
         return assess(host, lang)
@@ -168,29 +245,82 @@ def create_app(wh, settings: Settings, *, sender=None, clock=lambda: datetime.no
     @app.post("/register", status_code=202)
     def register(body: RegisterIn, request: Request):
         ip_limit(request)
+        client_ip = request.client.host if request.client else "unknown"
+        wait = registrations.check(client_ip, consume=False)
+        if wait is not None:
+            raise HTTPException(429, "registration temporarily unavailable", headers={"Retry-After": str(int(wait) + 1)})
+        try:
+            verify_turnstile(body.captcha_token or "", settings.turnstile_secret_key, client_ip, settings.captcha_timeout_s)
+        except CaptchaError as e:
+            raise HTTPException(400, str(e))
         try:
             out = registrar.register(name=body.company_name, email=body.email, contact_person=body.contact_person,
                                      domains=body.domains, aliases=body.aliases)
         except RegistrationError as e:
+            if "already registered" in str(e):
+                existing = wh.get_user_by_email(body.email)
+                if existing and existing["status"] == "PENDING" and sender is not None:
+                    out = registrar.resend_otp(body.email)
+                    try:
+                        send_verification(sender, settings, out["email"], existing["name"], out["otp"])
+                    except EMAIL_DELIVERY_ERRORS:
+                        log.exception("registration verification resend failed for %s", out["email"])
+                        return {"status": "PENDING", "verification_email_sent": False,
+                                "message": "A new verification code could not be sent. Please try again later."}
+                    registrations.hit(client_ip)
+                    return {"status": "PENDING", "verification_email_sent": True,
+                            "message": "A new verification code was sent. Check your email and enter it within 10 minutes."}
+                return {"status": "PENDING", "verification_email_sent": False,
+                        "message": "This email is already registered. Use the existing verification code or contact support."}
             raise HTTPException(422, str(e))
         if sender is not None:
-            send_verification(sender, settings, out["email"], body.company_name, out["token"])
-        return {"status": "PENDING", "message": "Check your email for a verification link (valid 24 hours)."}
+            try:
+                send_verification(sender, settings, out["email"], body.company_name, out["otp"])
+            except EMAIL_DELIVERY_ERRORS:
+                log.exception("registration verification email failed for %s", out["email"])
+                return {
+                    "status": "PENDING",
+                    "verification_email_sent": False,
+                    "message": (
+                        "Registration received, but the verification email could not be sent. "
+                        "An administrator can approve your registration from the dashboard."
+                    ),
+                }
+        registrations.hit(client_ip)
+        return {
+            "status": "PENDING",
+            "verification_email_sent": True,
+            "message": "Check your email for the 6-digit verification code, then enter it within 10 minutes.",
+        }
 
     @app.get("/register", response_class=HTMLResponse)
     def register_page():
-        return _page(WEB / "register.html")
+        path = WEB / "register.html"
+        if not path.exists():
+            return HTMLResponse("<p>page not found</p>", status_code=404)
+        return HTMLResponse(path.read_text(encoding="utf-8").replace("__TURNSTILE_SITE_KEY__", settings.turnstile_site_key))
 
-    @app.get("/verify/{token}")
-    def verify(token: str, request: Request):
+    @app.post("/verify-otp")
+    def verify_otp(body: VerifyOtpIn, request: Request):
         ip_limit(request)
+        client_ip = request.client.host if request.client else "unknown"
+        wait = otp_checks.check(client_ip)
+        if wait is not None:
+            raise HTTPException(429, "verification temporarily unavailable", headers={"Retry-After": str(int(wait) + 1)})
         try:
-            out = registrar.verify(token)
+            verify_turnstile(body.captcha_token or "", settings.turnstile_secret_key, client_ip, settings.captcha_timeout_s)
+        except CaptchaError as e:
+            raise HTTPException(400, str(e))
+        try:
+            out = registrar.verify_otp(body.otp, body.email)
         except RegistrationError as e:
             raise HTTPException(400, str(e))
-        if sender is not None:
-            send_api_key(sender, settings, out["email"], out["name"], out["api_key"])
-        return {"status": "ACTIVE", "message": "Your account is active. Your API key was emailed to you."}
+        return {"status": "ACTIVE", "message": "Your account is active. Copy your API key now; it will not be shown again.",
+                "company_id": out["company_id"], "api_key": out["api_key"]}
+
+    @app.get("/verify/{token}")
+    def retired_verify_link():
+        raise HTTPException(410, "Verification links are disabled. Use the one-time code sent by email.")
 
     @app.get("/unsubscribe/{token}", response_class=HTMLResponse)
     def unsubscribe(token: str):
@@ -208,7 +338,8 @@ def create_app(wh, settings: Settings, *, sender=None, clock=lambda: datetime.no
         if host is None:
             raise HTTPException(422, "that does not look like a valid domain or link")
         if sender is not None:
-            send_dispute_ack(sender, settings, body.email, host)
+            deliver(lambda: send_dispute_ack(sender, settings, body.email, host),
+                    "Your dispute was received, but the confirmation email could not be sent. Please try again later.")
         return {"status": "RECEIVED", "message": "Thank you. An analyst will review your dispute."}
 
     # ---- company (API key) --------------------------------------------------------------------------
@@ -297,10 +428,12 @@ def _page(path: Path) -> HTMLResponse:
 
 def build_default_app() -> FastAPI:
     """Factory for `uvicorn domainguard.api:build_default_app --factory`. Reads the environment; needs Snowflake."""
+    from .cli import _load_dotenv
+    _load_dotenv()
     from .factory import make_warehouse
     from .notifier import SMTPSender
 
     s = Settings.from_env()
     wh = make_warehouse(s)
     sender = SMTPSender(s.smtp_host, s.smtp_port, s.smtp_user, s.smtp_password, s.smtp_from) if s.smtp_host else None
-    return create_app(wh, s, sender=sender)
+    return create_app(wh, s, sender=sender, domain_checker=validate_registered_domain)

@@ -47,6 +47,16 @@ class MemoryWarehouse(Warehouse):
                 return copy.deepcopy(u)
         return None
 
+    def get_user_by_name(self, name):
+        for u in self.users.values():
+            if u["name"].strip().lower() == name.strip().lower():
+                return copy.deepcopy(u)
+        return None
+
+    def domain_registered(self, domain):
+        domain = domain.lower()
+        return any(r["domain"].lower() == domain for r in self.protected.values())
+
     def user_by_key_hash(self, key_hash):
         for u in self.users.values():
             if u.get("api_key_hash") == key_hash:
@@ -91,7 +101,13 @@ class MemoryWarehouse(Warehouse):
 
     def put_verification(self, row):
         self.verifications[row["token_hash"]] = {"company_id": row["company_id"], "email": row["email"],
-                                                 "expires_at": row["expires_at"], "verified_at": None}
+                                                 "expires_at": row["expires_at"], "verified_at": None,
+                                                 "otp_attempts": row.get("otp_attempts", 0)}
+
+    def pending_verification(self, company_id):
+        rows = [v for v in self.verifications.values()
+                if v["company_id"] == company_id and v.get("verified_at") is None]
+        return copy.deepcopy(rows[-1]) if rows else None
 
     def get_verification(self, token_hash):
         v = self.verifications.get(token_hash)

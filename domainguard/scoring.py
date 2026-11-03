@@ -79,6 +79,8 @@ def score_domain(
     *,
     age_days: float | None = None,
     on_blocklist: bool = False,
+    reputation_points: int = 0,
+    reputation_evidence: list[str] | None = None,
     now: datetime | None = None,
 ) -> ScoreResult:
     host = clean_host(raw_host)
@@ -98,6 +100,9 @@ def score_domain(
     match = match_brand(parts, watchlist)
     b = dict(zero)
     ev: list[str] = []
+    if reputation_points:
+        b["external_reputation"] = max(0, min(25, reputation_points))
+    ev.extend(reputation_evidence or [])
 
     if match:
         b["name_similarity"] = max(0, min(25, int(25 * (match.similarity - 70) / 30 + 0.5)))

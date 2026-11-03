@@ -5,6 +5,7 @@ import json
 import os
 import threading
 import time
+import uuid
 from pathlib import Path
 
 
@@ -58,6 +59,8 @@ class Health:
 
     def write(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(".tmp")
+        # Live ingestion can write health snapshots from several worker threads.
+        # Each writer needs its own temporary file before the atomic replacement.
+        tmp = self.path.with_name(f".{self.path.name}.{uuid.uuid4().hex}.tmp")
         tmp.write_text(json.dumps(self.snapshot(), indent=2))
         os.replace(tmp, self.path)

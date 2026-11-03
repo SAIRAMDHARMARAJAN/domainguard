@@ -13,13 +13,22 @@ from .collector import Collector, read_jsonl
 from .feed_collector import FeedCollector, FeedSource
 from .health import Health
 from .loader import load_stage
-from .normalize import split_host
+from .normalize import clean_host, split_host
 from .pipeline import score_all
 from .rdap_collector import RdapCollector
 from .stage import StageWriter, read_staged
 from .watchlist import WarehouseWatchlist
 
 log = logging.getLogger("domainguard.ingest")
+
+
+def _watchlist_match(row: dict, watchlist) -> bool:
+    """Keep only feed rows that match a watched brand; do not persist unrelated feed data."""
+    host = clean_host(row.get("domain", ""))
+    if not host:
+        return False
+    from .matcher import match_brand
+    return match_brand(split_host(host), watchlist) is not None
 
 
 class _Observed:
@@ -55,7 +64,10 @@ class Ingest:
         if settings.urlhaus_url:
             hdr = {"Auth-Key": settings.urlhaus_auth_key} if settings.urlhaus_auth_key else {}
             sources.append(FeedSource("urlhaus", settings.urlhaus_url, min_interval_s=3600, headers=hdr))
-        self.feeds = FeedCollector(sources, self.obs, fetch=fetch or feeds.fetch_text, state_dir=state)
+        self.feeds = FeedCollector(
+            sources, self.obs, fetch=fetch or feeds.fetch_text, state_dir=state,
+            accept=lambda row: _watchlist_match(row, self.watchlist.current()),
+        )
 
     def replay(self, path) -> dict:
         stats = self.collector.run_replay(read_jsonl(path))

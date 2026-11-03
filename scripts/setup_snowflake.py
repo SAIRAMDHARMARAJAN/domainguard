@@ -9,14 +9,25 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _load_dotenv(path: Path | None = None) -> None:
+    p = path or (ROOT / ".env")
+    if p.is_file():
+        for line in p.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip().strip('"'))
+
+
 def split_statements(sql: str) -> list[str]:
-    """Split on ';' at the end of a line, except inside $$ ... $$ blocks (stored procedures)."""
+    """Split on ';' at line ends (ignoring trailing comments), except inside $$ ... $$ blocks (stored procedures)."""
     out, buf, in_block = [], [], False
     for line in sql.splitlines():
         stripped = line.strip()
@@ -25,15 +36,26 @@ def split_statements(sql: str) -> list[str]:
         buf.append(line)
         if stripped.count("$$") % 2 == 1:
             in_block = not in_block
-        if not in_block and stripped.endswith(";"):
-            stmt = "\n".join(buf).rstrip().rstrip(";")
-            if stmt.strip():
-                out.append(stmt)
-            buf = []
+        if not in_block:
+            code_line = re.sub(r"--.*$", "", stripped).strip()
+            if code_line.endswith(";"):
+                last_line = buf[-1]
+                last_no_comment = re.sub(r"--.*$", "", last_line).rstrip()
+                if last_no_comment.endswith(";"):
+                    buf[-1] = last_no_comment[:-1].rstrip()
+                stmt = "\n".join(buf).rstrip()
+                if stmt.strip():
+                    out.append(stmt)
+                buf = []
+    if buf:
+        stmt = "\n".join(buf).rstrip()
+        if stmt.strip():
+            out.append(stmt)
     return out
 
 
 def main() -> int:
+    _load_dotenv()
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()

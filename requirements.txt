@@ -8,3 +8,6 @@ streamlit>=1.40
 pandas>=2
 pytest>=8
 httpx>=0.27                        # FastAPI TestClient
+email-validator>=2.2               # standards-compliant registration email validation
+dnspython>=2.6                     # DNS validation for protected domains
+python-whois>=0.9                  # WHOIS registration validation for protected domains

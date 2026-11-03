@@ -29,7 +29,8 @@ def test_replay_feeds_rdap_load_score_end_to_end(tmp_path):
                  lookup=lambda d: (200, rdap_dates[d], {}) if d in rdap_dates else (404, None, {}), sleep=lambda x: None)
     stats = ing.replay(ROOT / "data/sample_events.jsonl")
     assert stats["candidates"] >= 5 and stats["flush_errors"] == 0
-    assert ing.feeds_once()["openphish"]["new"] == 3
+    feed_report = ing.feeds_once()["openphish"]
+    assert feed_report["new"] == 1 and feed_report["watchlist_matches"] == 1
     assert ing.rdap_once(50)["staged"] >= 1
     assert ing.load()["files_loaded"] >= 3
     assert ing.load()["files_loaded"] == 0  # idempotent
@@ -72,6 +73,9 @@ def test_cli_health_without_snowflake(monkeypatch, tmp_path, capsys):
 
 
 def test_cli_check_reports_missing_settings(monkeypatch, tmp_path, capsys):
+    monkeypatch.delenv("SNOWFLAKE_PASSWORD", raising=False)
+    monkeypatch.delenv("SNOWFLAKE_USER", raising=False)
+    monkeypatch.delenv("SNOWFLAKE_ACCOUNT", raising=False)
     monkeypatch.setenv("DG_ALLOW_MEMORY_WAREHOUSE", "1")
     monkeypatch.setenv("DG_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("DG_STAGE_DIR", str(tmp_path / "stage"))
@@ -140,11 +144,11 @@ def dash(tmp_path, monkeypatch):
     return wh
 
 
-def test_dashboard_inbox_shows_defanged_rows(dash):
+def test_dashboard_overview_shows_campaign_summary(dash):
     at = AppTest.from_file(str(ROOT / "domainguard/dashboard.py"), default_timeout=60).run()
     assert not at.exception
     df = at.dataframe[0].value
-    assert "paypa1-secure-login[.]xyz" in set(df["domain"]) and "paypa1-secure-login.xyz" not in df.to_string()
+    assert "campaign" in df.columns and "paypal" in set(df["campaign"])
 
 
 def test_dashboard_token_gate(dash, monkeypatch):
@@ -157,15 +161,14 @@ def test_dashboard_token_gate(dash, monkeypatch):
     assert at.dataframe
 
 
-def test_dashboard_label_needs_a_name(dash):
+def test_dashboard_investigation_renders_evidence(dash):
     at = AppTest.from_file(str(ROOT / "domainguard/dashboard.py"), default_timeout=60).run()
-    at.sidebar.radio(key="page").set_value("Domain").run()
-    at.button(key="btn_CONFIRMED_THREAT").click().run()
-    assert any("name" in e.value.lower() for e in at.error)
-    assert dash.feedback_history("paypa1-secure-login.xyz") == []
+    at.sidebar.radio(key="page").set_value("Investigate").run()
+    assert not at.exception
+    assert any("Evidence timeline" in h.value for h in at.subheader)
 
 
-@pytest.mark.parametrize("page", ["Inbox", "Domain", "Takedowns", "Evaluation", "Reports", "Admin"])
+@pytest.mark.parametrize("page", ["Overview", "Investigate", "Cases", "Watchlist"])
 def test_every_dashboard_page_renders_without_error(dash, page):
     at = AppTest.from_file(str(ROOT / "domainguard/dashboard.py"), default_timeout=60).run()
     at.sidebar.radio(key="page").set_value(page).run()

@@ -8,8 +8,19 @@
 </head>
 <body>
   <main>
-    <h1>Is this link safe?</h1>
-    <p class="lead">Paste a link or a suspicious message. DomainGuard reads the text only and never opens the link.</p>
+    <nav class="topbar" aria-label="Primary">
+      <a class="brand" href="/"><span class="brand-mark">D</span><span>Domain<span class="brand-accent">Guard</span></span></a>
+      <div class="top-links"><a href="#checker">Check a link</a><a href="#awareness">Safety insights</a><a class="nav-cta" href="/register">Protect your brand</a></div>
+    </nav>
+    <header class="hero">
+      <div class="hero-copy"><div class="eyebrow">YOUR EVERYDAY ANTI-SCAM COMPANION</div>
+      <h1>Think before<br><span class="hero-accent">you click.</span></h1>
+      <p class="lead">Is this link safe? Check it here, understand scam warning signs, and learn practical ways to protect your money, identity, and accounts.</p>
+      <div class="hero-actions"><a class="hero-button" href="#checker">Check a link <span>→</span></a><a class="text-button" href="#awareness">Explore safety insights</a></div></div>
+      <div class="hero-art" aria-hidden="true"><div class="orb orb-one"></div><div class="orb orb-two"></div><div class="shield">✓</div><div class="floating-card floating-top">LIVE PROTECTION <strong>● Active</strong></div><div class="floating-card floating-bottom">Links checked safely <strong>Never opened</strong></div></div>
+    </header>
+    <div class="trust-strip"><span>🛡️ Privacy-first checks</span><span>🔗 We never open suspicious links</span><span>📰 Trusted public advisories</span><span>⚡ Fast, clear explanations</span></div>
+    <section id="checker" class="checker-shell">
     <div class="tabs" role="tablist">
       <button id="tab-check" role="tab" aria-selected="true" aria-controls="panel-check">Check a link</button>
       <button id="tab-scan" role="tab" aria-selected="false" aria-controls="panel-scan">Scan a message</button>
@@ -30,8 +41,23 @@
     </section>
     <label class="inline">Explain in <select id="language"></select></label>
     <div id="results" aria-live="polite"></div>
-    <p class="fine">Results are automated risk estimates from public data, not confirmed verdicts. Your text is not stored.
-      <a href="/register">Protect your brand</a> · <span id="dispute"></span></p>
+    </section>
+    <section id="awareness" class="awareness">
+      <div class="section-heading"><div><div class="eyebrow">LIVE AWARENESS</div><h2>Know what is happening</h2></div><span class="live-dot">● Updated from trusted sources</span></div>
+      <div class="awareness-grid">
+        <article class="panel threat-panel"><h3>Recent watched-brand threats</h3><p class="meta">Domains are defanged so they cannot be clicked accidentally.</p><div id="threats"><div class="skeleton">Loading live threat activity…</div></div></article>
+        <article class="panel"><h3>Five habits that stop scams</h3><ul id="precautions" class="checklist">
+          <li>Stop when a message creates urgency, fear, or secrecy.</li>
+          <li>Check the complete domain before signing in or paying.</li>
+          <li>Open official apps or type trusted addresses yourself.</li>
+          <li>Use unique passwords, a password manager, and MFA.</li>
+          <li>Never share OTPs, recovery codes, PINs, or remote access.</li>
+        </ul></article>
+      </div>
+      <article class="panel articles-panel"><div class="article-heading"><div><h3>Trusted scam news and advisories</h3><p class="meta">Fresh guidance from public-interest cybersecurity organizations.</p></div><span id="news-updated" class="meta"></span></div><div id="articles"><div class="skeleton">Loading trusted advisories…</div></div></article>
+    </section>
+    <footer class="fine">Automated results are risk estimates from public data, not confirmed verdicts. Your text is not stored.
+      <a href="/register">Protect your brand</a> · <span id="dispute"></span></footer>
   </main>
   <script src="/static/app.js"></script>
 </body>

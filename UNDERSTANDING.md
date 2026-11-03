@@ -87,8 +87,8 @@ What happens to one domain, `paypa1-secure-login.xyz`, for a PayPal customer:
 | **Each (company, domain) is alerted once.** | Prevents repeats. The email log is the record. |
 | **Digests** for DAILY and WEEKLY frequency. | Specification option; implemented. |
 | **Unsubscribe links are signed with HMAC** (`DG_SECRET_KEY`). The API refuses to start without the key. | A link cannot be forged to switch someone off; a missing key cannot be silently replaced. |
-| **Verification links expire after 24 hours and work once.** Only their hash is stored. | Specification: "email verification required". |
-| **API keys are stored as SHA-256 hashes**, shown once, and returned on rotation. | Specification: "API key generated and sent via email; secret rotation". The key is never in the database. |
+| **Verification OTPs expire after 10 minutes and work once.** Only their SHA-256 hash is stored, with a five-attempt limit. | Email links are not used because OTP entry avoids link forwarding and scanner issues. |
+| **API keys are stored as SHA-256 hashes** and shown once over the HTTPS OTP response. They are never sent by email or stored in the database. | Email is not a secure channel for bearer secrets, even when the message body is encrypted by the provider. |
 | **Dispute and takedown drafts never send.** The takedown module imports no mail or network library; a test checks this. | Specification: "no automatic sending", "human approval". |
 | **Approval needs the exact sentence** "I confirm this is accurate and I approve sending", a named analyst, and an email. | Specification: "Signature required". |
 | **The explanation worker only sees facts.** Output is validated: length, no links, no code, numbers only from the facts. | Specification limits: summary ≤ 150, reasons ≤ 100, advice ≤ 100. |
@@ -128,8 +128,11 @@ a TLS proxy (for example nginx or Cloudflare) and run it with
 ## 4. The company journey (registration to alerts)
 
 1. **Register** at `/register`: company name, email, optional contact, one or more domains, optional brand names.
-   Aliases are suggested from the domain and the name if you leave them out. Up to 20 domains per company.
-2. **Verify.** A link is emailed. Clicking it activates the account and emails the API key.
+   The email is normalized and syntax-checked with `email-validator`. In production, each domain must also have
+   resolvable nameservers and WHOIS registration evidence using `dnspython` and `python-whois`; this is an
+   ownership/infrastructure check, not a guarantee that the domain is safe. Aliases are suggested from the domain
+   and the name if you leave them out. Up to 20 domains per company.
+2. **Verify.** A six-digit OTP is emailed. Entering it at `/verify-otp` activates the account and returns the API key once over HTTPS. The key must be copied into a secure secret manager immediately.
 3. **Manage** domains and alert settings with the API key (`/company/...`). Rotating the key invalidates the old one.
 4. **Receive alerts** at the notification address (default: the account email). Settings: on or off, immediate or daily or
    weekly, minimum score (default 70). Every alert has an unsubscribe link.
@@ -146,7 +149,7 @@ a TLS proxy (for example nginx or Cloudflare) and run it with
 | `DG_API` read-only on Gold | read Gold, plus write on REF and OPS for registration and settings | `/register`, `/verify`, and settings must write. Nothing else is granted |
 | Roles described as `GRANT ALL` on schemas | separate, least-privilege grants, with FUTURE grants | Safer, and works for tables created later |
 | SQL file numbers `01`, `02`, `03_ops`, `05`, `06_ref` | `01` setup, `02` bronze, `03` silver, `04` gold, `05` ref and ops, `06` roles and retention | Keeps each file after the objects it refers to |
-| Verification "with OTP", then "clicks link" | a link, valid 24 hours, works once | The specification describes both; the link is the one that completes the flow |
+| Verification with OTP | six-digit code, valid 10 minutes, five attempts, works once | The code is entered on the registration page; no verification link is generated |
 | Email alert links to `/check?domain=<domain>` | link carries the defanged domain | The raw name never appears in the email; the link still opens our checker |
 | `precision = (confirmed + blocklisted) / flagged` | counted as a union (a domain both confirmed and listed counts once) | The plain sum can exceed 1.0. The score-only precision is also reported |
 | `recall = (flagged_before + blocklisted_matches) / blocklisted_lookalikes` | `flagged_before_listing / blocklisted_lookalikes` | The specification's formula counts blocklisted matches twice |

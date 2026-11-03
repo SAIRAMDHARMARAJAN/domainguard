@@ -74,8 +74,12 @@ def test_no_key_and_no_caller_means_template_without_network(monkeypatch):
 
 
 def test_template_is_english_and_defanged():
+    # Template now respects the requested language.
     t = template_explanation(V, "Hindi")
-    assert t["language"] == "English" and t["source"] == "template" and "[.]" in t["summary"]
+    assert t["language"] == "Hindi" and t["source"] == "template" and "[.]" in t["summary"]
+    # English template still works.
+    t_en = template_explanation(V, "English")
+    assert t_en["language"] == "English" and "[.]" in t_en["summary"]
 
 
 def test_message_tactics_are_detected_not_executed():

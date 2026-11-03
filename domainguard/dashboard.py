@@ -1,17 +1,25 @@
 """Analyst dashboard (Streamlit).  streamlit run domainguard/dashboard.py
 
-Pages: Threat inbox (filters), Domain details (breakdown, evidence, explanation, lead time, feedback history, label
-buttons, takedown draft), Takedowns (approve with signature, export, mark sent), Evaluation, Reports, Admin
-(companies, domains, API key rotation, email preferences, CSV export).
+Primary workflow: Overview, Investigate, Watchlist, and Cases. Investigations group related lookalike domains into
+campaigns using the existing verdict, evidence, feedback, and takedown records. Legacy evaluation/report helpers
+remain available in code for operational checks but are not part of the analyst navigation.
 Access: DG_ANALYST_TOKEN gates the whole page (placeholder; put real SSO in front before any deployment)."""
 from __future__ import annotations
 
 import hmac
 import os
+import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+
+# Streamlit may execute this file with its parent directory as the working
+# directory, so ensure the repository root is importable.
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from domainguard import evaluation, takedown
 from domainguard.auth import new_api_key, hash_key
@@ -20,6 +28,10 @@ from domainguard.factory import make_warehouse
 from domainguard.normalize import defang
 from domainguard.registration import Registrar, RegistrationError
 from domainguard.watchlist import WarehouseWatchlist
+
+if "PYTEST_CURRENT_TEST" not in os.environ:
+    from domainguard.cli import _load_dotenv
+    _load_dotenv()
 
 st.set_page_config(page_title="DomainGuard analyst", layout="wide")
 
@@ -68,6 +80,72 @@ def inbox_page(wh):
         st.info("Nothing matches these filters.")
         return
     st.dataframe(_rows_df(rows), width="stretch", hide_index=True)
+
+
+def overview_page(wh):
+    st.header("Brand impersonation command center")
+    rows = wh.inbox(limit=500)
+    active = wh.active_protected_rows()
+    drafts = wh.list_takedowns()
+    unreviewed = [r for r in rows if r.get("analyst_label", "UNREVIEWED") == "UNREVIEWED"]
+    high_risk = [r for r in rows if r["classification"] in ("HIGH_RISK", "DANGEROUS")]
+    campaigns = {r.get("matched_brand") or r["company_id"] for r in rows}
+    c = st.columns(4)
+    c[0].metric("Open threats", len(unreviewed))
+    c[1].metric("High-risk domains", len(high_risk))
+    c[2].metric("Protected domains", len(active))
+    c[3].metric("Open cases", sum(d["status"] in ("DRAFT", "APPROVED") for d in drafts))
+    st.subheader("What needs attention")
+    if not rows:
+        st.info("No impersonation activity is available yet.")
+        return
+    summary = {}
+    for row in rows:
+        key = row.get("matched_brand") or "Unattributed"
+        item = summary.setdefault(key, {"campaign": key, "domains": 0, "max score": 0, "unreviewed": 0})
+        item["domains"] += 1
+        item["max score"] = max(item["max score"], row["score"])
+        item["unreviewed"] += row.get("analyst_label", "UNREVIEWED") == "UNREVIEWED"
+    st.dataframe(pd.DataFrame(sorted(summary.values(), key=lambda x: (x["unreviewed"], x["max score"]),
+                                     reverse=True)), hide_index=True, width="stretch")
+    st.caption(f"{len(campaigns)} active campaign groups. Open Investigate to review evidence and create a case.")
+
+
+def investigate_page(wh):
+    st.header("Investigate campaigns")
+    rows = wh.inbox(limit=500)
+    if not rows:
+        st.info("No flagged domains yet.")
+        return
+    groups = {}
+    for row in rows:
+        key = row.get("matched_brand") or f"Company {row['company_id'][:8]}"
+        groups.setdefault(key, []).append(row)
+    campaign = st.selectbox("Campaign / brand cluster",
+                            sorted(groups, key=lambda k: max(r["score"] for r in groups[k]), reverse=True),
+                            key="campaign_choice")
+    members = sorted(groups[campaign], key=lambda r: (r["score"], r.get("first_flagged_at", "")), reverse=True)
+    st.caption(f"{len(members)} related domains. Review the shared evidence before opening a case.")
+    st.dataframe(_rows_df(members), hide_index=True, width="stretch")
+    selected = {f"{defang(r['domain'])} — {r['classification']} ({r['score']}/100)": r for r in members}
+    choice = st.selectbox("Domain evidence", list(selected), key="campaign_domain")
+    v = selected[choice]
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Risk score", f"{v['score']}/100")
+    c2.metric("Classification", v["classification"])
+    c3.metric("First flagged", str(v.get("first_flagged_at") or "unknown"))
+    st.subheader("Evidence timeline")
+    for evidence in v.get("evidence", []):
+        st.write(f"- {evidence}")
+    st.caption(f"First listed: {v.get('first_listed_at') or 'not listed yet'}")
+    name = st.text_input("Analyst name", key="campaign_analyst_name")
+    email = st.text_input("Analyst email", key="campaign_analyst_email")
+    if st.button("Create takedown case", key="campaign_create_case"):
+        try:
+            did = takedown.draft(wh, v, analyst_name=name, analyst_email=email)
+            st.success(f"Case {did} created. Continue approval and export in Cases.")
+        except ValueError as e:
+            st.error(str(e))
 
 
 def domain_page(wh):
@@ -201,6 +279,20 @@ def reports_page(wh):
 def admin_page(wh):
     st.header("Admin")
     users = wh.list_users()
+    pending = [u for u in users if u["status"] == "PENDING"]
+    if pending:
+        st.subheader("Pending registrations")
+        st.caption("Approve only registrations you have verified through a trusted channel. The API key is shown once.")
+        pending_options = {f"{u['name']} — {u['email']} ({u['company_id'][:8]})": u["company_id"] for u in pending}
+        pending_id = pending_options[st.selectbox("Registration", list(pending_options), key="pending_registration")]
+        if st.button("Approve registration", key="approve_registration"):
+            try:
+                approved = Registrar(wh).approve_pending(pending_id)
+                st.success(f"{approved['name']} is active.")
+                st.warning("Copy this API key now. It will not be shown again.")
+                st.code(approved["api_key"])
+            except RegistrationError as e:
+                st.error(str(e))
     st.subheader("Companies")
     st.dataframe(pd.DataFrame([{"company": u["company_id"], "name": u["name"], "status": u["status"],
                                 "notifications": u["email_notifications"]} for u in users]), hide_index=True)
@@ -208,8 +300,9 @@ def admin_page(wh):
     options = {f"{u['name']} ({u['company_id'][:8]})": u["company_id"] for u in users}
     if options:
         cid = options[st.selectbox("Company", list(options), key="adm_company")]
+        protected = wh.protected_for(cid)
         st.dataframe(pd.DataFrame([{"domain": defang(r["domain"]), "aliases": ", ".join(r["brand_aliases"]),
-                                    "verified": r["verified"]} for r in wh.protected_for(cid)]), hide_index=True)
+                                    "verified": r["verified"]} for r in protected]), hide_index=True)
         new = st.text_input("Add domain", key="adm_new")
         if st.button("Add", key="adm_add"):
             try:
@@ -217,13 +310,17 @@ def admin_page(wh):
                 st.success("Added.")
             except RegistrationError as e:
                 st.error(str(e))
-        rm = st.text_input("Remove domain", key="adm_rm")
-        if st.button("Remove", key="adm_rm_btn"):
-            try:
-                Registrar(wh).remove_domain(cid, rm)
-                st.success("Removed.")
-            except RegistrationError as e:
-                st.error(str(e))
+        if protected:
+            domain_options = {defang(r["domain"]): r["domain"] for r in protected}
+            rm_label = st.selectbox("Remove domain", list(domain_options), key="adm_rm")
+            if st.button("Remove", key="adm_rm_btn"):
+                try:
+                    Registrar(wh).remove_domain(cid, domain_options[rm_label])
+                    st.success("Removed.")
+                except RegistrationError as e:
+                    st.error(str(e))
+        else:
+            st.info("No registered domains for this company.")
         if st.button("Issue a new API key (shown once)", key="adm_key"):
             st.code(Registrar(wh).rotate_key(cid))
         st.subheader("Email preferences")
@@ -238,9 +335,9 @@ def main():
     if not _gate():
         return
     wh = _store()
-    page = st.sidebar.radio("Page", ["Inbox", "Domain", "Takedowns", "Evaluation", "Reports", "Admin"], key="page")
-    {"Inbox": inbox_page, "Domain": domain_page, "Takedowns": takedown_page, "Evaluation": evaluation_page,
-     "Reports": reports_page, "Admin": admin_page}[page](wh)
+    page = st.sidebar.radio("Workflow", ["Overview", "Investigate", "Watchlist", "Cases"], key="page")
+    {"Overview": overview_page, "Investigate": investigate_page, "Watchlist": admin_page,
+     "Cases": takedown_page}[page](wh)
 
 
 main()

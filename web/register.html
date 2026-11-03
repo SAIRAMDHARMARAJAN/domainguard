@@ -5,15 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Protect your brand</title>
   <link rel="stylesheet" href="/static/style.css">
+  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
 </head>
 <body>
   <main>
     <h1>Protect your brand</h1>
-    <p class="lead">Register your domains. We confirm your email, then send your API key. Alerts go to that address.</p>
+    <p class="lead">Register your domains. We confirm your email with a one-time code. Company names may be shared; email addresses and domains must be unique.</p>
     <form id="form-register">
       <label for="company_name">Company name</label>
       <input id="company_name" required maxlength="120">
-      <label for="email">Email (we send a verification link)</label>
+      <label for="email">Email (we send a one-time code)</label>
       <input id="email" type="email" required maxlength="254">
       <label for="contact_person">Contact person (optional)</label>
       <input id="contact_person" maxlength="120">
@@ -21,9 +22,17 @@
       <textarea id="domains" rows="4" required placeholder="abcbank.com"></textarea>
       <label for="aliases">Brand names (comma-separated, optional)</label>
       <input id="aliases" maxlength="500" placeholder="abcbank, abc bank">
+      <div class="cf-turnstile" data-sitekey="__TURNSTILE_SITE_KEY__" data-callback="onRegistrationCaptcha" id="turnstile-widget"></div>
       <button type="submit">Register</button>
     </form>
     <div id="results" aria-live="polite"></div>
+    <form id="form-otp" hidden>
+      <label for="otp">Verification code</label>
+      <input id="otp" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" minlength="6" maxlength="6" required>
+      <div class="cf-turnstile" data-sitekey="__TURNSTILE_SITE_KEY__" data-callback="onOtpCaptcha" id="otp-turnstile-widget"></div>
+      <button type="submit">Verify email and show API key</button>
+    </form>
+    <div id="key-result" aria-live="polite"></div>
     <p class="fine"><a href="/">Back to the checker</a></p>
   </main>
   <script src="/static/register.js"></script>
